@@ -1899,33 +1899,6 @@ namespace winrt::TerminalApp::implementation
         }
     }
 
-    // Method Description:
-    // - Close the terminal app. If there is more
-    //   than one tab opened, show a warning dialog.
-    fire_and_forget TerminalPage::CloseWindow()
-    {
-        if (_HasMultipleTabs() &&
-            _settings.GlobalSettings().ConfirmCloseAllTabs() &&
-            !_displayingCloseDialog)
-        {
-            if (_newTabButton && _newTabButton.Flyout())
-            {
-                _newTabButton.Flyout().Hide();
-            }
-            _DismissTabContextMenus();
-            _displayingCloseDialog = true;
-            auto warningResult = co_await _ShowCloseWarningDialog();
-            _displayingCloseDialog = false;
-
-            if (warningResult != ContentDialogResult::Primary)
-            {
-                co_return;
-            }
-        }
-
-        _CloseWindowRequestedHandlers(*this, nullptr);
-    }
-
     void TerminalPage::PersistState()
     {
         if (_startupState != StartupState::Initialized)
@@ -1988,6 +1961,33 @@ namespace winrt::TerminalApp::implementation
         layout.InitialSize(windowSize);
 
         ApplicationState::SharedInstance().AppendPersistedWindowLayout(layout);
+    }
+
+    // Method Description:
+    // - Close the terminal app. If there is more
+    //   than one tab opened, show a warning dialog.
+    fire_and_forget TerminalPage::CloseWindow()
+    {
+        if (_HasMultipleTabs() &&
+            _settings.GlobalSettings().ConfirmCloseAllTabs() &&
+            !_displayingCloseDialog)
+        {
+            if (_newTabButton && _newTabButton.Flyout())
+            {
+                _newTabButton.Flyout().Hide();
+            }
+            _DismissTabContextMenus();
+            _displayingCloseDialog = true;
+            auto warningResult = co_await _ShowCloseWarningDialog();
+            _displayingCloseDialog = false;
+
+            if (warningResult != ContentDialogResult::Primary)
+            {
+                co_return;
+            }
+        }
+
+        _CloseWindowRequestedHandlers(*this, nullptr);
     }
 
     // Method Description:
