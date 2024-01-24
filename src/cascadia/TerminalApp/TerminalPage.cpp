@@ -5,7 +5,6 @@
 #include "pch.h"
 #include "TerminalPage.h"
 #include "TerminalPage.g.cpp"
-#include "LastTabClosedEventArgs.g.cpp"
 #include "RenameWindowRequestedArgs.g.cpp"
 #include "RequestMoveContentArgs.g.cpp"
 #include "RequestReceiveContentArgs.g.cpp"
@@ -656,9 +655,9 @@ namespace winrt::TerminalApp::implementation
         // GH#12267: Make sure that we don't instantly close ourselves when
         // we're readying to accept a defterm connection. In that case, we don't
         // have a tab yet, but will once we're initialized.
-        if (_tabs.Size() == 0 && !(_shouldStartInboundListener || _isEmbeddingInboundListener))
+        if (_tabs.Size() == 0 && !_shouldStartInboundListener && !_isEmbeddingInboundListener)
         {
-            _LastTabClosedHandlers(*this, winrt::make<LastTabClosedEventArgs>(false));
+            _CloseWindowRequestedHandlers(*this, nullptr);
             co_return;
         }
         else
@@ -1210,7 +1209,7 @@ namespace winrt::TerminalApp::implementation
         TerminalConnection::ITerminalConnection connection{ nullptr };
 
         auto connectionType = profile.ConnectionType();
-        winrt::guid sessionGuid{};
+        Windows::Foundation::Collections::ValueSet valueSet;
 
         if (connectionType == TerminalConnection::AzureConnection::ConnectionType() &&
             TerminalConnection::AzureConnection::IsAzureConnectionAvailable())
@@ -1226,23 +1225,16 @@ namespace winrt::TerminalApp::implementation
                 connection = TerminalConnection::ConptyConnection{};
             }
 
-            auto valueSet = TerminalConnection::ConptyConnection::CreateSettings(azBridgePath.native(),
-                                                                                 L".",
-                                                                                 L"Azure",
-                                                                                 false,
-                                                                                 L"",
-                                                                                 nullptr,
-                                                                                 settings.InitialRows(),
-                                                                                 settings.InitialCols(),
-                                                                                 winrt::guid(),
-                                                                                 profile.Guid());
-
-            if constexpr (Feature_VtPassthroughMode::IsEnabled())
-            {
-                valueSet.Insert(L"passthroughMode", Windows::Foundation::PropertyValue::CreateBoolean(settings.VtPassthrough()));
-            }
-
-            connection.Initialize(valueSet);
+            valueSet = TerminalConnection::ConptyConnection::CreateSettings(azBridgePath.native(),
+                                                                            L".",
+                                                                            L"Azure",
+                                                                            false,
+                                                                            L"",
+                                                                            nullptr,
+                                                                            settings.InitialRows(),
+                                                                            settings.InitialCols(),
+                                                                            winrt::guid(),
+                                                                            profile.Guid());
         }
 
         else
@@ -1267,30 +1259,35 @@ namespace winrt::TerminalApp::implementation
             // process until later, on another thread, after we've already
             // restored the CWD to its original value.
             auto newWorkingDirectory{ _evaluatePathForCwd(settings.StartingDirectory()) };
-            auto conhostConn = TerminalConnection::ConptyConnection();
-            auto valueSet = TerminalConnection::ConptyConnection::CreateSettings(settings.Commandline(),
-                                                                                 newWorkingDirectory,
-                                                                                 settings.StartingTitle(),
-                                                                                 settings.ReloadEnvironmentVariables(),
-                                                                                 _WindowProperties.VirtualEnvVars(),
-                                                                                 environment,
-                                                                                 settings.InitialRows(),
-                                                                                 settings.InitialCols(),
-                                                                                 winrt::guid(),
-                                                                                 profile.Guid());
-
-            valueSet.Insert(L"passthroughMode", Windows::Foundation::PropertyValue::CreateBoolean(settings.VtPassthrough()));
+            connection = TerminalConnection::ConptyConnection{};
+            valueSet = TerminalConnection::ConptyConnection::CreateSettings(settings.Commandline(),
+                                                                            newWorkingDirectory,
+                                                                            settings.StartingTitle(),
+                                                                            settings.ReloadEnvironmentVariables(),
+                                                                            _WindowProperties.VirtualEnvVars(),
+                                                                            environment,
+                                                                            settings.InitialRows(),
+                                                                            settings.InitialCols(),
+                                                                            winrt::guid(),
+                                                                            profile.Guid());
 
             if (inheritCursor)
             {
                 valueSet.Insert(L"inheritCursor", Windows::Foundation::PropertyValue::CreateBoolean(true));
             }
-
-            conhostConn.Initialize(valueSet);
-
-            sessionGuid = conhostConn.Guid();
-            connection = conhostConn;
         }
+
+        if (const auto id = settings.SessionId(); id != winrt::guid{})
+        {
+            valueSet.Insert(L"sessionId", Windows::Foundation::PropertyValue::CreateGuid(id));
+        }
+
+        if constexpr (Feature_VtPassthroughMode::IsEnabled())
+        {
+            valueSet.Insert(L"passthroughMode", Windows::Foundation::PropertyValue::CreateBoolean(settings.VtPassthrough()));
+        }
+
+        connection.Initialize(valueSet);
 
         TraceLoggingWrite(
             g_hTerminalAppProvider,
@@ -1298,7 +1295,7 @@ namespace winrt::TerminalApp::implementation
             TraceLoggingDescription("Event emitted upon the creation of a connection"),
             TraceLoggingGuid(connectionType, "ConnectionTypeGuid", "The type of the connection"),
             TraceLoggingGuid(profile.Guid(), "ProfileGuid", "The profile's GUID"),
-            TraceLoggingGuid(sessionGuid, "SessionGuid", "The WT_SESSION's GUID"),
+            TraceLoggingGuid(connection.SessionId(), "SessionGuid", "The WT_SESSION's GUID"),
             TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
             TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
 
@@ -1903,18 +1900,42 @@ namespace winrt::TerminalApp::implementation
     }
 
     // Method Description:
-    // - Saves the window position and tab layout to the application state
-    // - This does not create the InitialPosition field, that needs to be
-    //   added externally.
-    // Arguments:
-    // - <none>
-    // Return Value:
-    // - the window layout
-    WindowLayout TerminalPage::GetWindowLayout()
+    // - Close the terminal app. If there is more
+    //   than one tab opened, show a warning dialog.
+    fire_and_forget TerminalPage::CloseWindow()
+    {
+        if (_HasMultipleTabs() &&
+            _settings.GlobalSettings().ConfirmCloseAllTabs() &&
+            !_displayingCloseDialog)
+        {
+            if (_newTabButton && _newTabButton.Flyout())
+            {
+                _newTabButton.Flyout().Hide();
+            }
+            _DismissTabContextMenus();
+            _displayingCloseDialog = true;
+            auto warningResult = co_await _ShowCloseWarningDialog();
+            _displayingCloseDialog = false;
+
+            if (warningResult != ContentDialogResult::Primary)
+            {
+                co_return;
+            }
+        }
+
+        _CloseWindowRequestedHandlers(*this, nullptr);
+    }
+
+    void TerminalPage::PersistState()
     {
         if (_startupState != StartupState::Initialized)
         {
-            return nullptr;
+            return;
+        }
+
+        for (const auto& tab : _tabs)
+        {
+            tab.Shutdown();
         }
 
         std::vector<ActionAndArgs> actions;
@@ -1922,7 +1943,7 @@ namespace winrt::TerminalApp::implementation
         for (auto tab : _tabs)
         {
             auto t = winrt::get_self<implementation::TabBase>(tab);
-            auto tabActions = t->BuildStartupActions();
+            auto tabActions = t->BuildStartupActions(BuildStartupKind::None);
             actions.insert(actions.end(), std::make_move_iterator(tabActions.begin()), std::make_move_iterator(tabActions.end()));
         }
 
@@ -1949,7 +1970,7 @@ namespace winrt::TerminalApp::implementation
             actions.emplace_back(std::move(action));
         }
 
-        WindowLayout layout{};
+        WindowLayout layout;
         layout.TabLayout(winrt::single_threaded_vector<ActionAndArgs>(std::move(actions)));
 
         auto mode = LaunchMode::DefaultMode;
@@ -1966,47 +1987,7 @@ namespace winrt::TerminalApp::implementation
 
         layout.InitialSize(windowSize);
 
-        return layout;
-    }
-
-    // Method Description:
-    // - Close the terminal app. If there is more
-    //   than one tab opened, show a warning dialog.
-    // Arguments:
-    // - bypassDialog: if true a dialog won't be shown even if the user would
-    //   normally get confirmation. This is used in the case where the user
-    //   has already been prompted by the Quit action.
-    fire_and_forget TerminalPage::CloseWindow(bool bypassDialog)
-    {
-        if (!bypassDialog &&
-            _HasMultipleTabs() &&
-            _settings.GlobalSettings().ConfirmCloseAllTabs() &&
-            !_displayingCloseDialog)
-        {
-            if (_newTabButton && _newTabButton.Flyout())
-            {
-                _newTabButton.Flyout().Hide();
-            }
-            _DismissTabContextMenus();
-            _displayingCloseDialog = true;
-            auto warningResult = co_await _ShowCloseWarningDialog();
-            _displayingCloseDialog = false;
-
-            if (warningResult != ContentDialogResult::Primary)
-            {
-                co_return;
-            }
-        }
-
-        if (_settings.GlobalSettings().ShouldUsePersistedLayout())
-        {
-            // Don't delete the ApplicationState when all of the tabs are removed.
-            // If there is still a monarch living they will get the event that
-            // a window closed and trigger a new save without this window.
-            _maintainStateOnTabClose = true;
-        }
-
-        _RemoveAllTabs();
+        ApplicationState::SharedInstance().AppendPersistedWindowLayout(layout);
     }
 
     // Method Description:
@@ -2068,7 +2049,7 @@ namespace winrt::TerminalApp::implementation
             {
                 if (const auto pane{ terminalTab->GetActivePane() })
                 {
-                    auto startupActions = pane->BuildStartupActions(0, 1, true, true);
+                    auto startupActions = pane->BuildStartupActions(0, 1, BuildStartupKind::MovePane);
                     _DetachPaneFromWindow(pane);
                     _MoveContent(std::move(startupActions.args), windowId, tabIdx);
                     focusedTab->DetachPane();
@@ -2210,7 +2191,7 @@ namespace winrt::TerminalApp::implementation
 
             if (tab)
             {
-                auto startupActions = tab->BuildStartupActions(true);
+                auto startupActions = tab->BuildStartupActions(BuildStartupKind::Content);
                 _DetachTabFromWindow(tab);
                 _MoveContent(std::move(startupActions), windowId, 0);
                 _RemoveTab(*tab);
@@ -3029,7 +3010,17 @@ namespace winrt::TerminalApp::implementation
         // TermControl will copy the settings out of the settings passed to it.
 
         const auto content = _manager.CreateCore(settings.DefaultSettings(), settings.UnfocusedSettings(), connection);
-        return _SetupControl(TermControl{ content });
+        const TermControl control{ content };
+
+        if (const auto id = settings.DefaultSettings().SessionId(); id != winrt::guid{})
+        {
+            const auto settingsDir = CascadiaSettings::SettingsDirectory();
+            const auto idStr = Utils::GuidToPlainString(id);
+            const auto path = fmt::format(FMT_COMPILE(L"{}\\buffer_{}.txt"), settingsDir, idStr);
+            control.RestoreFromPath(path);
+        }
+
+        return _SetupControl(control);
     }
 
     TermControl TerminalPage::_AttachControlToContent(const uint64_t& contentId)
@@ -5173,7 +5164,7 @@ namespace winrt::TerminalApp::implementation
                                                const uint32_t tabIndex,
                                                std::optional<til::point> dragPoint)
     {
-        auto startupActions = _stashed.draggedTab->BuildStartupActions(true);
+        auto startupActions = _stashed.draggedTab->BuildStartupActions(BuildStartupKind::Content);
         _DetachTabFromWindow(_stashed.draggedTab);
 
         _MoveContent(std::move(startupActions), windowId, tabIndex, dragPoint);

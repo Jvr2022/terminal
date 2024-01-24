@@ -183,6 +183,7 @@ chh
 chshdng
 CHT
 Cic
+CLASSSTRING
 CLE
 cleartype
 CLICKACTIVE
@@ -598,6 +599,7 @@ FECF
 FEEF
 fesb
 FFAF
+ffd
 FFDE
 FFrom
 fgbg
@@ -759,6 +761,7 @@ hdr
 HDROP
 hdrstop
 HEIGHTSCROLL
+hfind
 hfont
 hfontresource
 hglobal
