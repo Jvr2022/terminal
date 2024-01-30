@@ -17,7 +17,6 @@
     <ClCompile Include="TfConvArea.cpp" />
     <ClCompile Include="TfDispAttr.cpp" />
     <ClCompile Include="TfEditSession.cpp" />
-    <ClCompile Include="TfTxtevCb.cpp" />
     <ClCompile Include="precomp.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>

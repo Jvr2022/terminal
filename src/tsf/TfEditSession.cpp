@@ -25,70 +25,50 @@ Notes:
 #include "TfDispAttr.h"
 #include "TfEditSession.h"
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::IUnknown::QueryInterface
-// CEditSessionObject::IUnknown::AddRef
-// CEditSessionObject::IUnknown::Release
-//
-//----------------------------------------------------------------------------
+CEditSessionObject::CEditSessionObject(CConsoleTSF* tsf): _tsf{tsf}
+{}
 
 STDAPI CEditSessionObject::QueryInterface(REFIID riid, void** ppvObj)
 {
-    *ppvObj = nullptr;
+    if (!ppvObj)
+    {
+        return E_POINTER;
+    }
 
-    if (IsEqualIID(riid, IID_ITfEditSession))
+    if (IsEqualGUID(riid, IID_ITfEditSession))
     {
         *ppvObj = static_cast<ITfEditSession*>(this);
     }
-    else if (IsEqualIID(riid, IID_IUnknown))
+    else if (IsEqualGUID(riid, IID_IUnknown))
     {
         *ppvObj = static_cast<IUnknown*>(this);
     }
-
-    if (*ppvObj)
+    else
     {
-        AddRef();
-        return S_OK;
+        *ppvObj = nullptr;
+        return E_NOINTERFACE;
     }
 
-    return E_NOINTERFACE;
+    AddRef();
+    return S_OK;
 }
 
-STDAPI_(ULONG)
-CEditSessionObject::AddRef()
+ULONG STDMETHODCALLTYPE CEditSessionObject::AddRef()
 {
-    return ++m_cRef;
+    return InterlockedIncrement(&_referenceCount);
 }
 
-STDAPI_(ULONG)
-CEditSessionObject::Release()
+ULONG STDMETHODCALLTYPE CEditSessionObject::Release()
 {
-    long cr;
-
-    cr = --m_cRef;
-    FAIL_FAST_IF(!(cr >= 0));
-
+    const auto cr = InterlockedDecrement(&_referenceCount);
     if (cr == 0)
     {
         delete this;
     }
-
     return cr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::GetAllTextRange
-//
-//----------------------------------------------------------------------------
-
-// static
-[[nodiscard]] HRESULT CEditSessionObject::GetAllTextRange(TfEditCookie ec,
-                                                          ITfContext* ic,
-                                                          ITfRange** range,
-                                                          LONG* lpTextLength,
-                                                          TF_HALTCOND* lpHaltCond)
+[[nodiscard]] HRESULT CEditSessionObject::GetAllTextRange(TfEditCookie ec, ITfContext* ic, ITfRange** range, LONG* lpTextLength, TF_HALTCOND* lpHaltCond)
 {
     HRESULT hr;
 
@@ -122,50 +102,32 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::SetTextInRange
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionObject::SetTextInRange(TfEditCookie ec,
-                                                         ITfRange* range,
-                                                         __in_ecount_opt(len) LPWSTR psz,
-                                                         DWORD len)
+[[nodiscard]] HRESULT CEditSessionObject::SetTextInRange(TfEditCookie ec, ITfRange* range, __in_ecount_opt(len) LPWSTR psz, DWORD len)
 {
     auto hr = E_FAIL;
-    if (g_pConsoleTSF)
+    if (_tsf)
     {
-        g_pConsoleTSF->SetModifyingDocFlag(TRUE);
+        _tsf->SetModifyingDocFlag(TRUE);
         hr = range->SetText(ec, 0, psz, len);
-        g_pConsoleTSF->SetModifyingDocFlag(FALSE);
+        _tsf->SetModifyingDocFlag(FALSE);
     }
     return hr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::ClearTextInRange
-//
-//----------------------------------------------------------------------------
-
 [[nodiscard]] HRESULT CEditSessionObject::ClearTextInRange(TfEditCookie ec, ITfRange* range)
 {
-    //
-    // Clear the text in Cicero TOM
-    //
     return SetTextInRange(ec, range, nullptr, 0);
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::_GetCursorPosition
-//
-//----------------------------------------------------------------------------
+HRESULT CEditSessionObject::_GetTextAndAttribute(TfEditCookie ec, ITfRange* range, std::wstring& CompStr, std::vector<TfGuidAtom> CompGuid, BOOL bInWriteSession, CicCategoryMgr* pCicCatMgr, CicDisplayAttributeMgr* pCicDispAttr)
+{
+    std::wstring ResultStr;
+    return _GetTextAndAttribute(ec, range, CompStr, CompGuid, ResultStr, bInWriteSession, pCicCatMgr, pCicDispAttr);
+}
 
 [[nodiscard]] HRESULT CEditSessionObject::_GetCursorPosition(TfEditCookie ec, CCompCursorPos& CompCursorPos)
 {
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     if (pic == nullptr)
     {
         return E_FAIL;
@@ -198,12 +160,6 @@ CEditSessionObject::Release()
     return hr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::_GetTextAndAttribute
-//
-//----------------------------------------------------------------------------
-
 //
 // Get text and attribute in given range
 //
@@ -223,19 +179,11 @@ CEditSessionObject::Release()
 //                                                   result_comp
 //                                          +1   <-       0    ->     -1
 //
-
-[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttribute(TfEditCookie ec,
-                                                               ITfRange* rangeIn,
-                                                               std::wstring& CompStr,
-                                                               std::vector<TfGuidAtom>& CompGuid,
-                                                               std::wstring& ResultStr,
-                                                               BOOL bInWriteSession,
-                                                               CicCategoryMgr* pCicCatMgr,
-                                                               CicDisplayAttributeMgr* pCicDispAttr)
+[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttribute(TfEditCookie ec, ITfRange* rangeIn, std::wstring& CompStr, std::vector<TfGuidAtom>& CompGuid, std::wstring& ResultStr, BOOL bInWriteSession, CicCategoryMgr* pCicCatMgr, CicDisplayAttributeMgr* pCicDispAttr)
 {
     HRESULT hr;
 
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     if (pic == nullptr)
     {
         return E_FAIL;
@@ -261,10 +209,7 @@ CEditSessionObject::Release()
     }
 
     wil::com_ptr_nothrow<ITfReadOnlyProperty> propComp;
-    if (FAILED(hr = pic->TrackProperties(guids, guid_size, // system property
-                                         NULL,
-                                         0, // application property
-                                         &propComp)))
+    if (FAILED(hr = pic->TrackProperties(guids, guid_size, NULL, 0, &propComp)))
     {
         return hr;
     }
@@ -348,12 +293,7 @@ CEditSessionObject::Release()
             // GAP range
             //
             no_display_attribute_range->CompareStart(ec, gap_range.get(), TF_ANCHOR_START, &result_comp);
-            LOG_IF_FAILED(_GetTextAndAttributeGapRange(ec,
-                                                       gap_range.get(),
-                                                       result_comp,
-                                                       CompStr,
-                                                       CompGuid,
-                                                       ResultStr));
+            LOG_IF_FAILED(_GetTextAndAttributeGapRange(ec, gap_range.get(), result_comp, CompStr, CompGuid, ResultStr));
 
             //
             // Get display attribute data if some GUID_ATOM exist.
@@ -361,13 +301,7 @@ CEditSessionObject::Release()
             TF_DISPLAYATTRIBUTE da;
             auto guidatom = TF_INVALID_GUIDATOM;
 
-            LOG_IF_FAILED(pCicDispAttr->GetDisplayAttributeData(pCicCatMgr->GetCategoryMgr(),
-                                                                ec,
-                                                                prop.get(),
-                                                                pPropRange.get(),
-                                                                &da,
-                                                                &guidatom,
-                                                                ulNumProp));
+            LOG_IF_FAILED(pCicDispAttr->GetDisplayAttributeData(pCicCatMgr->GetCategoryMgr(), ec, prop.get(), pPropRange.get(), &da, &guidatom, ulNumProp));
 
             //
             // Property range
@@ -380,16 +314,7 @@ CEditSessionObject::Release()
             //
             // Get property text
             //
-            LOG_IF_FAILED(_GetTextAndAttributePropertyRange(ec,
-                                                            pPropRange.get(),
-                                                            fCompExist,
-                                                            result_comp,
-                                                            bInWriteSession,
-                                                            da,
-                                                            guidatom,
-                                                            CompStr,
-                                                            CompGuid,
-                                                            ResultStr));
+            LOG_IF_FAILED(_GetTextAndAttributePropertyRange(ec, pPropRange.get(), fCompExist, result_comp, bInWriteSession, da, guidatom, CompStr, CompGuid, ResultStr));
 
         } // while
 
@@ -437,18 +362,7 @@ CEditSessionObject::Release()
     return hr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::_GetTextAndAttributeGapRange
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttributeGapRange(TfEditCookie ec,
-                                                                       ITfRange* gap_range,
-                                                                       LONG result_comp,
-                                                                       std::wstring& CompStr,
-                                                                       std::vector<TfGuidAtom>& CompGuid,
-                                                                       std::wstring& ResultStr)
+[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttributeGapRange(TfEditCookie ec, ITfRange* gap_range, LONG result_comp, std::wstring& CompStr, std::vector<TfGuidAtom>& CompGuid, std::wstring& ResultStr)
 {
     TfGuidAtom guidatom;
     guidatom = TF_INVALID_GUIDATOM;
@@ -472,11 +386,7 @@ CEditSessionObject::Release()
         // Retrieve gap text if there exist.
         //
         ulcch0 = ARRAYSIZE(wstr0) - 1;
-        if (FAILED(gap_range->GetText(ec,
-                                      TF_TF_MOVESTART, // Move range to next after get text.
-                                      wstr0,
-                                      ulcch0,
-                                      &ulcch0)))
+        if (FAILED(gap_range->GetText(ec, TF_TF_MOVESTART, wstr0, ulcch0, &ulcch0)))
         {
             return E_FAIL;
         }
@@ -500,22 +410,7 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::_GetTextAndAttributePropertyRange
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttributePropertyRange(TfEditCookie ec,
-                                                                            ITfRange* pPropRange,
-                                                                            BOOL fCompExist,
-                                                                            LONG result_comp,
-                                                                            BOOL bInWriteSession,
-                                                                            TF_DISPLAYATTRIBUTE da,
-                                                                            TfGuidAtom guidatom,
-                                                                            std::wstring& CompStr,
-                                                                            std::vector<TfGuidAtom>& CompGuid,
-                                                                            std::wstring& ResultStr)
+[[nodiscard]] HRESULT CEditSessionObject::_GetTextAndAttributePropertyRange(TfEditCookie ec, ITfRange* pPropRange, BOOL fCompExist, LONG result_comp, BOOL bInWriteSession, TF_DISPLAYATTRIBUTE da, TfGuidAtom guidatom, std::wstring& CompStr, std::vector<TfGuidAtom>& CompGuid, std::wstring& ResultStr)
 {
     BOOL fEmpty;
     WCHAR wstr0[256 + 1];
@@ -533,11 +428,7 @@ CEditSessionObject::Release()
         // Retrieve property text if there exist.
         //
         ulcch0 = ARRAYSIZE(wstr0) - 1;
-        if (FAILED(pPropRange->GetText(ec,
-                                       TF_TF_MOVESTART, // Move range to next after get text.
-                                       wstr0,
-                                       ulcch0,
-                                       &ulcch0)))
+        if (FAILED(pPropRange->GetText(ec, TF_TF_MOVESTART, wstr0, ulcch0, &ulcch0)))
         {
             return E_FAIL;
         }
@@ -580,19 +471,9 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionObject::_GetNoDisplayAttributeRange
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionObject::_GetNoDisplayAttributeRange(TfEditCookie ec,
-                                                                      ITfRange* rangeIn,
-                                                                      const GUID** guids,
-                                                                      const int guid_size,
-                                                                      ITfRange* no_display_attribute_range)
+[[nodiscard]] HRESULT CEditSessionObject::_GetNoDisplayAttributeRange(TfEditCookie ec, ITfRange* rangeIn, const GUID** guids, const int guid_size, ITfRange* no_display_attribute_range)
 {
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     if (pic == nullptr)
     {
         return E_FAIL;
@@ -666,15 +547,9 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionCompositionComplete::CompComplete
-//
-//----------------------------------------------------------------------------
-
 [[nodiscard]] HRESULT CEditSessionCompositionComplete::CompComplete(TfEditCookie ec)
 {
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     RETURN_HR_IF_NULL(E_FAIL, pic);
 
     // Get the whole text, finalize it, and set empty string in TOM
@@ -685,7 +560,7 @@ CEditSessionObject::Release()
 
     // Check if a part of the range has already been finalized but not removed yet.
     // Adjust the range appropriately to avoid inserting the same text twice.
-    auto cchCompleted = g_pConsoleTSF->GetCompletedRangeLength();
+    auto cchCompleted = _tsf->GetCompletedRangeLength();
     if ((cchCompleted > 0) &&
         (cchCompleted < cch) &&
         SUCCEEDED(spRange->ShiftStart(ec, cchCompleted, &cchCompleted, NULL)))
@@ -699,7 +574,7 @@ CEditSessionObject::Release()
     }
 
     // Get conversion area service.
-    auto conv_area = g_pConsoleTSF->GetConversionArea();
+    auto conv_area = _tsf->GetConversionArea();
     RETURN_HR_IF_NULL(E_FAIL, conv_area);
 
     // If there is no string in TextStore we don't have to do anything.
@@ -725,36 +600,30 @@ CEditSessionObject::Release()
     CATCH_RETURN();
 
     // Update the stored length of the completed fragment.
-    g_pConsoleTSF->SetCompletedRangeLength(cchCompleted + cch);
+    _tsf->SetCompletedRangeLength(cchCompleted + cch);
 
     return hr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionCompositionCleanup::EmptyCompositionRange()
-//
-//----------------------------------------------------------------------------
-
 [[nodiscard]] HRESULT CEditSessionCompositionCleanup::EmptyCompositionRange(TfEditCookie ec)
 {
-    if (!g_pConsoleTSF)
+    if (!_tsf)
     {
         return E_FAIL;
     }
-    if (!g_pConsoleTSF->IsPendingCompositionCleanup())
+    if (!_tsf->IsPendingCompositionCleanup())
     {
         return S_OK;
     }
 
     auto hr = E_FAIL;
-    auto pic = g_pConsoleTSF->GetInputContext();
+    auto pic = _tsf->GetInputContext();
     if (pic != nullptr)
     {
         // Cleanup (empty the context range) after the last composition.
 
         hr = S_OK;
-        auto cchCompleted = g_pConsoleTSF->GetCompletedRangeLength();
+        auto cchCompleted = _tsf->GetCompletedRangeLength();
         if (cchCompleted != 0)
         {
             wil::com_ptr_nothrow<ITfRange> spRange;
@@ -768,41 +637,35 @@ CEditSessionObject::Release()
                     spRange->ShiftEnd(ec, (cchCompleted - cch), &cch, nullptr);
                 }
                 hr = ClearTextInRange(ec, spRange.get());
-                g_pConsoleTSF->SetCompletedRangeLength(0); // cleaned up all completed text
+                _tsf->SetCompletedRangeLength(0); // cleaned up all completed text
             }
         }
     }
-    g_pConsoleTSF->OnCompositionCleanup(SUCCEEDED(hr));
+    _tsf->OnCompositionCleanup(SUCCEEDED(hr));
     return hr;
 }
-
-//+---------------------------------------------------------------------------
-//
-// CEditSessionUpdateCompositionString::UpdateCompositionString
-//
-//----------------------------------------------------------------------------
 
 [[nodiscard]] HRESULT CEditSessionUpdateCompositionString::UpdateCompositionString(TfEditCookie ec)
 {
     HRESULT hr;
 
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     if (pic == nullptr)
     {
         return E_FAIL;
     }
 
     // Reset the 'edit session requested' flag.
-    g_pConsoleTSF->OnEditSession();
+    _tsf->OnEditSession();
 
     // If the composition has been cancelled\finalized, no update necessary.
-    if (!g_pConsoleTSF->IsInComposition())
+    if (!_tsf->IsInComposition())
     {
         return S_OK;
     }
 
     BOOL bInWriteSession;
-    if (FAILED(hr = pic->InWriteSession(g_pConsoleTSF->GetTfClientId(), &bInWriteSession)))
+    if (FAILED(hr = pic->InWriteSession(_tsf->GetTfClientId(), &bInWriteSession)))
     {
         return hr;
     }
@@ -832,13 +695,7 @@ CEditSessionObject::Release()
     {
         if (fInterim)
         {
-            hr = _MakeInterimString(ec,
-                                    FullTextRange.get(),
-                                    InterimRange.get(),
-                                    lTextLength,
-                                    bInWriteSession,
-                                    pCicCat,
-                                    pDispAttr);
+            hr = _MakeInterimString(ec, FullTextRange.get(), InterimRange.get(), lTextLength, bInWriteSession, pCicCat, pDispAttr);
         }
         else
         {
@@ -858,17 +715,9 @@ CEditSessionObject::Release()
     return hr;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionUpdateCompositionString::_IsInterimSelection
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_IsInterimSelection(TfEditCookie ec,
-                                                                               ITfRange** pInterimRange,
-                                                                               BOOL* pfInterim)
+[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_IsInterimSelection(TfEditCookie ec, ITfRange** pInterimRange, BOOL* pfInterim)
 {
-    auto pic = g_pConsoleTSF ? g_pConsoleTSF->GetInputContext() : nullptr;
+    auto pic = _tsf ? _tsf->GetInputContext() : nullptr;
     if (pic == nullptr)
     {
         return E_FAIL;
@@ -903,17 +752,7 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionUpdateCompositionString::_MakeCompositionString
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_MakeCompositionString(TfEditCookie ec,
-                                                                                  ITfRange* FullTextRange,
-                                                                                  BOOL bInWriteSession,
-                                                                                  CicCategoryMgr* pCicCatMgr,
-                                                                                  CicDisplayAttributeMgr* pCicDispAttr)
+[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_MakeCompositionString(TfEditCookie ec, ITfRange* FullTextRange, BOOL bInWriteSession, CicCategoryMgr* pCicCatMgr, CicDisplayAttributeMgr* pCicDispAttr)
 {
     std::wstring CompStr;
     std::vector<TfGuidAtom> CompGuid;
@@ -921,21 +760,14 @@ CEditSessionObject::Release()
     std::wstring ResultStr;
     auto fIgnorePreviousCompositionResult = FALSE;
 
-    RETURN_IF_FAILED(_GetTextAndAttribute(ec,
-                                          FullTextRange,
-                                          CompStr,
-                                          CompGuid,
-                                          ResultStr,
-                                          bInWriteSession,
-                                          pCicCatMgr,
-                                          pCicDispAttr));
+    RETURN_IF_FAILED(_GetTextAndAttribute(ec, FullTextRange, CompStr, CompGuid, ResultStr, bInWriteSession, pCicCatMgr, pCicDispAttr));
 
-    if (g_pConsoleTSF && g_pConsoleTSF->IsPendingCompositionCleanup())
+    if (_tsf && _tsf->IsPendingCompositionCleanup())
     {
         // Don't draw the previous composition result if there was a cleanup session requested for it.
         fIgnorePreviousCompositionResult = TRUE;
         // Cancel pending cleanup, since the ResultStr was cleared from the composition in _GetTextAndAttribute.
-        g_pConsoleTSF->OnCompositionCleanup(TRUE);
+        _tsf->OnCompositionCleanup(TRUE);
     }
 
     RETURN_IF_FAILED(_GetCursorPosition(ec, CompCursorPos));
@@ -952,7 +784,7 @@ CEditSessionObject::Release()
     try
     {
         // Get conversion area service.
-        auto conv_area = g_pConsoleTSF ? g_pConsoleTSF->GetConversionArea() : nullptr;
+        auto conv_area = _tsf ? _tsf->GetConversionArea() : nullptr;
         RETURN_HR_IF_NULL(E_FAIL, conv_area);
 
         if (!ResultStr.empty() && !fIgnorePreviousCompositionResult)
@@ -985,9 +817,7 @@ CEditSessionObject::Release()
                 DisplayAttributes.emplace_back(da);
             }
 
-            return conv_area->DrawComposition(CompStr, // composition string
-                                              DisplayAttributes, // display attributes
-                                              CompCursorPos.GetCursorPosition()); // cursor position
+            return conv_area->DrawComposition(CompStr, DisplayAttributes, CompCursorPos.GetCursorPosition());
         }
     }
     CATCH_RETURN();
@@ -995,19 +825,7 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionUpdateCompositionString::_MakeInterimString
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_MakeInterimString(TfEditCookie ec,
-                                                                              ITfRange* FullTextRange,
-                                                                              ITfRange* InterimRange,
-                                                                              LONG lTextLength,
-                                                                              BOOL bInWriteSession,
-                                                                              CicCategoryMgr* pCicCatMgr,
-                                                                              CicDisplayAttributeMgr* pCicDispAttr)
+[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_MakeInterimString(TfEditCookie ec, ITfRange* FullTextRange, ITfRange* InterimRange, LONG lTextLength, BOOL bInWriteSession, CicCategoryMgr* pCicCatMgr, CicDisplayAttributeMgr* pCicDispAttr)
 {
     LONG lStartResult;
     LONG lEndResult;
@@ -1051,14 +869,7 @@ CEditSessionObject::Release()
     std::vector<TfGuidAtom> CompGuid;
     std::wstring _tempResultStr;
 
-    RETURN_IF_FAILED(_GetTextAndAttribute(ec,
-                                          InterimRange,
-                                          CompStr,
-                                          CompGuid,
-                                          _tempResultStr,
-                                          bInWriteSession,
-                                          pCicCatMgr,
-                                          pCicDispAttr));
+    RETURN_IF_FAILED(_GetTextAndAttribute(ec, InterimRange, CompStr, CompGuid, _tempResultStr, bInWriteSession, pCicCatMgr, pCicDispAttr));
 
     // Get display attribute manager
     auto dam = pCicDispAttr->GetDisplayAttributeMgr();
@@ -1072,7 +883,7 @@ CEditSessionObject::Release()
     try
     {
         // Get conversion area service.
-        auto conv_area = g_pConsoleTSF ? g_pConsoleTSF->GetConversionArea() : nullptr;
+        auto conv_area = _tsf ? _tsf->GetConversionArea() : nullptr;
         RETURN_HR_IF_NULL(E_FAIL, conv_area);
 
         if (!CompStr.empty())
@@ -1109,15 +920,7 @@ CEditSessionObject::Release()
     return S_OK;
 }
 
-//+---------------------------------------------------------------------------
-//
-// CEditSessionUpdateCompositionString::_CreateCategoryAndDisplayAttributeManager
-//
-//----------------------------------------------------------------------------
-
-[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_CreateCategoryAndDisplayAttributeManager(
-    CicCategoryMgr** pCicCatMgr,
-    CicDisplayAttributeMgr** pCicDispAttr)
+[[nodiscard]] HRESULT CEditSessionUpdateCompositionString::_CreateCategoryAndDisplayAttributeManager(CicCategoryMgr** pCicCatMgr, CicDisplayAttributeMgr** pCicDispAttr)
 {
     auto hr = E_OUTOFMEMORY;
 
