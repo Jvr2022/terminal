@@ -16,12 +16,12 @@ Abstract:
 
 #include "../server/DeviceHandle.h"
 
-[[nodiscard]] static inline NTSTATUS CreateClientHandle(PHANDLE Handle, HANDLE ServerHandle, PCWSTR Name, BOOLEAN Inheritable)
+[[nodiscard]] inline NTSTATUS CreateClientHandle(PHANDLE Handle, HANDLE ServerHandle, PCWSTR Name, BOOLEAN Inheritable)
 {
     return DeviceHandle::CreateClientHandle(Handle, ServerHandle, Name, Inheritable);
 }
 
-[[nodiscard]] static inline NTSTATUS CreateServerHandle(PHANDLE Handle, BOOLEAN Inheritable)
+[[nodiscard]] inline NTSTATUS CreateServerHandle(PHANDLE Handle, BOOLEAN Inheritable)
 {
     return DeviceHandle::CreateServerHandle(Handle, Inheritable);
 }
